@@ -1,0 +1,21 @@
+{
+    "servers": [
+
+        {
+            "name": "Alvaro",
+            "username": "aarmasjurado",
+            "host": "ieticloudpro.ieti.cat",
+            "port": 20127,
+            "key": "id_rsa"
+        },
+
+        {
+            "name": "Test",
+            "username": "testuser",
+            "host": "testhost.com",
+            "port": 22,
+            "key": "id_rsa"
+        }
+
+        ]
+}
