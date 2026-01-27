@@ -6,12 +6,14 @@ import 'package:path/path.dart' as p;
 import 'package:flutter/widget_previews.dart';
 import 'dart:convert'; 
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 
 SSHManager sshManager = SSHManager();
 bool isConnected = false;
 List<ServerInfo> servers = [];
 
 List<FileItem> currentFiles = [];
+String currentPath = "/";
 
 class FileItem {
   final String name;
@@ -58,13 +60,15 @@ Future<void> getServers() async {
 }
 
 class ServerInfo {
-  final String name;
-  final String ip;
-  final int port;
-  final String username;
-  final String key;
+  int id;
+  String name;
+  String ip;
+  int port;
+  String username;
+  String key;
 
   ServerInfo({
+    required this.id,
     required this.name,
     required this.ip,
     required this.port,
@@ -74,12 +78,24 @@ class ServerInfo {
 
   factory ServerInfo.fromJson(Map<String, dynamic> json) {
     return ServerInfo(
+      id: json['id'],
       name: json['name'],
       ip: json['host'],
       port: json['port'],
       username: json['username'],
       key: json['key'],
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'name': name,
+      'ip': ip,
+      'port': port,
+      'username': username,
+      'key': key,
+    };
   }
 }
 
@@ -112,6 +128,7 @@ class MyHomePage extends StatefulWidget {
 
 
 class _MyHomePageState extends State<MyHomePage> {
+  late TextEditingController _servernameController;
   late TextEditingController _userController;
   late TextEditingController _hostController;
   late TextEditingController _portController;
@@ -122,6 +139,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
+    _servernameController = TextEditingController(text: "Alvaro");
     _userController = TextEditingController(text: "aarmasjurado");
     _hostController = TextEditingController(text: "ieticloudpro.ieti.cat");
     _portController = TextEditingController(text: "20127");
@@ -141,6 +159,8 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    int currentServerId = 1;
+    String currentServername = "Alvaro";
     String currentUsername = "aarmasjurado";
     String currentIP = "ieticloudpro.ieti.cat";
     String currentKey = "id_rsa";
@@ -183,6 +203,8 @@ class _MyHomePageState extends State<MyHomePage> {
                     subtitle: Text(server.ip, style: const TextStyle(color: Colors.white70),),
                     onTap: () {
                       setState(() {
+                        currentServerId = server.id;
+                        _servernameController.text = server.name;
                         _userController.text = server.username;
                         _hostController.text = server.ip;
                         _portController.text = server.port.toString();
@@ -192,9 +214,19 @@ class _MyHomePageState extends State<MyHomePage> {
                   );
                 },
               ),
+              ),
+
+              
+              
+              Padding(
+                padding: EdgeInsets.all(16), 
+                child: ElevatedButton(
+                  onPressed: () {
+
+                  }, 
+                  child: Text("NEW")
+                  )
               )
-              
-              
               
             ],
           ),
@@ -215,7 +247,23 @@ class _MyHomePageState extends State<MyHomePage> {
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 24),
-            
+
+            TextField(
+              controller: _servernameController,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'Server Name',
+                prefixIcon: Icon(Icons.person_outline),
+              ),
+              onChanged: (value) => currentServername = value,
+              onEditingComplete: () => {
+                changeServerName(currentServerId, currentServername),
+                saveServers(servers),
+                _loadServers()
+              },
+            ),
+            const SizedBox(height: 16),
+
             TextField(
               controller: _userController,
               decoration: const InputDecoration(
@@ -278,7 +326,7 @@ class _MyHomePageState extends State<MyHomePage> {
                     
 
                     if (success && mounted) {
-                      await sshManager.listFiles("/");
+                      await sshManager.listFiles(currentPath);
                       Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -290,6 +338,21 @@ class _MyHomePageState extends State<MyHomePage> {
                         const SnackBar(content: Text("Error al conectar")),
                       );
                     }
+                  },
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              
+              child: ElevatedButton.icon(
+                  
+                icon: const Icon(Icons.delete, color: Colors.redAccent),
+                label: const Text('Delete', style: TextStyle(color: Colors.redAccent),),
+                onPressed: () async {
+                    
                   },
               ),
             ),
@@ -306,6 +369,8 @@ class _MyHomePageState extends State<MyHomePage> {
 
 class SSHManager {
   SSHClient? _client;
+  SftpClient? _sftp; // Teniendo un solo cliente SFTP para no estar creando una y otra vez
+  
   bool _shouldReconnect = true;
 
   Future<bool> connect(String username, String ip, int port, String key) async {
@@ -336,22 +401,21 @@ class SSHManager {
 
   try {
     // 1. Iniciar el cliente SFTP
-    final sftp = await _client!.sftp();
+    _sftp ??= await _client!.sftp();
     
     // 2. Listar el directorio
-    final items = await sftp.listdir(path);
+    final items = await _sftp!.listdir(path);
     currentFiles.clear();
     for (final item in items) {
-      
-      logger.i("Nombre: ${item.filename} | Es directorio: ${item.attr.isDirectory}");
       currentFiles.add(FileItem(
         name: item.filename,
         isDirectory: item.attr.isDirectory,
-        isImage: (item.filename.endsWith('.png') || item.filename.endsWith('.jpg') || item.filename.endsWith('.jpeg') || item.filename.endsWith('.gif'))
+        isImage: isImageFile(item.filename),
       ));
     }
   } catch (e) {
     logger.e("Error listando archivos: $e");
+    _sftp = null; // Forzando reconexión si hay error
   }
 }
 
@@ -370,26 +434,64 @@ class SSHManager {
   }
 }
 
+class FileDetailPage extends StatefulWidget {
+  final SSHManager manager;
+
+  const FileDetailPage({super.key, required this.manager});
+
+  @override
+  State<FileDetailPage> createState() => _FileDetailPageState();
+}
+
+class _FileDetailPageState extends State<FileDetailPage> {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("File Details"),
+      ),
+      body: const Center(
+        child: Text("Detalles del archivo"),
+      ),
+    );
+  }
+}
+
+
 class FileExplorerPage extends StatefulWidget {
   final SSHManager manager;
+  
   const FileExplorerPage({super.key, required this.manager});
 
   @override
   State<FileExplorerPage> createState() => _FileExplorerPageState();
 }
 
+
 class _FileExplorerPageState extends State<FileExplorerPage> {
   void _navigateTo(String path) async {
-    await widget.manager.listFiles(path);
+    String cleanPath = p.normalize(path);
+    currentPath = cleanPath;
+    await widget.manager.listFiles(cleanPath);
     setState(() {}); // Refrescando vista
+
+    
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.blueGrey[900], // Para que se vea el texto blanco
-      appBar: AppBar(title: const Text("Servidor Remoto")),
-      body: ListView.builder(
+      appBar: AppBar(title: const Text("Proxmox Drive")),
+      body: Column(children: [
+        Container(
+          padding: const EdgeInsets.all(16.0),
+          color: const Color.fromARGB(255, 18, 23, 26),
+          width: double.infinity,
+          child: Text(currentPath, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),),
+          ),
+
+        Expanded(child: ListView.builder(
         itemCount: currentFiles.length,
         itemBuilder: (context, index) {
           final file = currentFiles[index];
@@ -402,11 +504,73 @@ class _FileExplorerPageState extends State<FileExplorerPage> {
             onTap: () {
               if (file.isDirectory) {
                 logger.i("Entrando en: ${file.name}");
+                if (file.name == "..") {
+                  // Navegar al directorio anterior
+                  String parentPath = p.dirname(currentPath);
+                  _navigateTo(parentPath);
+                } else {
+                  // Navegar al subdirectorio
+                  String newPath = p.join(currentPath, file.name);
+                  _navigateTo(newPath);
+                }
               }
+            },
+            onLongPress:() {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => FileDetailPage(manager: widget.manager),
+                ),
+              );
             },
           );
         },
-      ),
+      ),)
+        
+      ],) 
     );
+  }
+}
+
+bool isImageFile(String fileName) {
+  final imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'];
+  final extension = p.extension(fileName).toLowerCase();
+  return imageExtensions.contains(extension);
+}
+
+void changeServerName(int serverId, String newName) {
+  for (var server in servers) {
+    if (server.id == serverId) {
+      server = ServerInfo(
+        id: server.id,
+        name: newName,
+        ip: server.ip,
+        port: server.port,
+        username: server.username,
+        key: server.key,
+      );
+      logger.i("Server name changed to $newName");
+      break;
+    }
+  }
+}
+
+Future<void> saveServers(List<ServerInfo> listaServers) async {
+  try {
+    // 1. Obtener la ruta de la carpeta de documentos de la app
+    final directory = await getApplicationDocumentsDirectory();
+    final file = File('${directory.path}/servers.json');
+
+    // 2. Convertir la lista o mapa a una cadena JSON legible
+    String jsonString = jsonEncode(servers.map((s) => s.toJson()).toList());
+    logger.i(jsonString);
+
+    // 3. Escribir el archivo
+    await file.writeAsString(jsonString);
+    
+    logger.i("Archivo guardado en: ${file.path}");
+    
+  } catch (e) {
+    logger.e("Error: $e");
   }
 }

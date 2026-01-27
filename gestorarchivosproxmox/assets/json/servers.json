@@ -2,6 +2,7 @@
     "servers": [
 
         {
+            "id": 1,
             "name": "Alvaro",
             "username": "aarmasjurado",
             "host": "ieticloudpro.ieti.cat",
@@ -10,6 +11,7 @@
         },
 
         {
+            "id": 2,
             "name": "Test",
             "username": "testuser",
             "host": "testhost.com",
