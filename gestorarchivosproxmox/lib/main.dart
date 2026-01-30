@@ -16,7 +16,7 @@ List<FileItem> currentFiles = [];
 String currentPath = "/";
 
 class FileItem {
-  final String name;
+  String name;
   final bool isDirectory;
   final bool isImage;
   FileItem({
@@ -396,6 +396,22 @@ class SSHManager {
   }
 }
 
+  Future<void> changeFileName(String oldPath, String newPath) async {
+  if (_client == null) return;
+
+  try {
+    // 1. Iniciar el cliente SFTP
+    _sftp ??= await _client!.sftp();
+    
+    // 2. Renombrar el archivo
+    await _sftp!.rename(oldPath, newPath);
+    logger.i("Archivo renombrado de $oldPath a $newPath");
+  } catch (e) {
+    logger.e("Error renombrando archivo: $e");
+    _sftp = null; // Forzando reconexión si hay error
+  }
+  }
+
   Future<void> listFiles(String path) async {
   if (_client == null) return;
 
@@ -436,22 +452,65 @@ class SSHManager {
 
 class FileDetailPage extends StatefulWidget {
   final SSHManager manager;
+  final FileItem file;
 
-  const FileDetailPage({super.key, required this.manager});
+  const FileDetailPage({super.key, required this.manager, required this.file});
 
   @override
   State<FileDetailPage> createState() => _FileDetailPageState();
+
+  
 }
 
 class _FileDetailPageState extends State<FileDetailPage> {
   @override
+
+
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text("File Details"),
       ),
-      body: const Center(
-        child: Text("Detalles del archivo"),
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(widget.file.name, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),),
+            SizedBox(
+              width: 300,
+              child: TextField(
+                decoration: InputDecoration(
+                  labelText: 'File Name',
+                  border: OutlineInputBorder(),
+                ),
+                onSubmitted: (value) {
+                  String oldPath = p.join(currentPath, widget.file.name);
+                  String newPath = p.join(currentPath, value);
+                  widget.manager.changeFileName(oldPath, newPath);
+                  setState(() {
+                    widget.file.name = value;
+                    widget.manager.listFiles(currentPath);
+                  });
+                  
+                },
+                controller: TextEditingController(text: widget.file.name),
+              ),
+            ),
+            
+            const SizedBox(width: 16),
+            Icon(widget.file.isDirectory ? Icons.folder : Icons.insert_drive_file, size: 200),
+
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: () {
+               
+              }, 
+              child: const Text("Download")
+            )
+            
+            
+          ]
+        ),
       ),
     );
   }
@@ -465,6 +524,8 @@ class FileExplorerPage extends StatefulWidget {
 
   @override
   State<FileExplorerPage> createState() => _FileExplorerPageState();
+
+  
 }
 
 
@@ -519,9 +580,12 @@ class _FileExplorerPageState extends State<FileExplorerPage> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => FileDetailPage(manager: widget.manager),
+                  builder: (context) => FileDetailPage(manager: widget.manager, file: file),
                 ),
-              );
+              ).then((_) { // Con esto puedo actualizar la UI al volver
+                widget.manager.listFiles(currentPath);
+                setState(() {});
+              });
             },
           );
         },
