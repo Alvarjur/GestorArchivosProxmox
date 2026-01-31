@@ -19,10 +19,12 @@ class FileItem {
   String name;
   final bool isDirectory;
   final bool isImage;
+  String permissions;
   FileItem({
     required this.name,
     required this.isDirectory,
     required this.isImage,
+    required this.permissions,
   });
 }
 
@@ -57,6 +59,11 @@ Future<void> getServers() async {
     _servers.add(server);
   }
   servers = _servers;
+}
+
+class AppColors {
+  static const Color permissionColor = Color.fromRGBO(137, 213, 137, 1);
+  static const Color noPermissionColor = Color.fromRGBO(200, 100, 100, 1);
 }
 
 class ServerInfo {
@@ -366,7 +373,25 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 }
-
+String formatPermissions(int? mode) {
+  if (mode == null) return '---------';
+  
+  // Extraemos los últimos 9 bits (rwxrwxrwx)
+  final bits = mode & 0x1FF; 
+  
+  String res = '';
+  final chars = ['r', 'w', 'x'];
+  
+  for (int i = 0; i < 9; i++) {
+    // Verificamos cada bit de mayor a menor importancia
+    if ((bits >> (8 - i)) & 1 == 1) {
+      res += chars[i % 3];
+    } else {
+      res += '-';
+    }
+  }
+  return res;
+}
 class SSHManager {
   SSHClient? _client;
   SftpClient? _sftp; // Teniendo un solo cliente SFTP para no estar creando una y otra vez
@@ -423,10 +448,13 @@ class SSHManager {
     final items = await _sftp!.listdir(path);
     currentFiles.clear();
     for (final item in items) {
+
       currentFiles.add(FileItem(
         name: item.filename,
         isDirectory: item.attr.isDirectory,
         isImage: isImageFile(item.filename),
+        permissions: formatPermissions(item.attr.mode?.value),
+        
       ));
     }
   } catch (e) {
@@ -463,8 +491,9 @@ class FileDetailPage extends StatefulWidget {
 }
 
 class _FileDetailPageState extends State<FileDetailPage> {
+  double buttonPadding = 4;
   @override
-
+  
 
   Widget build(BuildContext context) {
     return Scaffold(
@@ -506,9 +535,102 @@ class _FileDetailPageState extends State<FileDetailPage> {
                
               }, 
               child: const Text("Download")
-            )
-            
-            
+            ),
+
+            const SizedBox(height: 24),
+            Text("Permissions", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: widget.file.permissions[0] == 'r' ? AppColors.permissionColor : AppColors.noPermissionColor,
+                ),
+                onPressed: () {
+                // addPermission('1r');
+              }, child: Text("R")
+              ),
+              SizedBox(width: buttonPadding,),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: widget.file.permissions[1] == 'w' ? AppColors.permissionColor : AppColors.noPermissionColor,
+                ),
+                onPressed: () {
+                // addPermission('1w');
+              }, child: Text("W")
+              ),
+              SizedBox(width: buttonPadding,),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: widget.file.permissions[2] == 'x' ? AppColors.permissionColor : AppColors.noPermissionColor,
+                ),
+                onPressed: () {
+                // addPermission('1x');
+              }, child: Text("X")
+              ),
+
+              SizedBox(width: 16),
+
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: widget.file.permissions[3] == 'r' ? AppColors.permissionColor : AppColors.noPermissionColor,
+                ),
+                onPressed: () {
+                // addPermission('2r');
+              }, child: Text("R")
+              ),
+              SizedBox(width: buttonPadding,),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: widget.file.permissions[4] == 'w' ? AppColors.permissionColor : AppColors.noPermissionColor,
+                ),
+                onPressed: () {
+                // addPermission('2w');
+              }, child: Text("W")
+              ),
+              SizedBox(width: buttonPadding,),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: widget.file.permissions[5] == 'x' ? AppColors.permissionColor : AppColors.noPermissionColor,
+                ),
+                onPressed: () {
+                // addPermission('2x');
+              }, child: Text("X")
+              ),
+
+              SizedBox(width: 16),
+
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: widget.file.permissions[6] == 'r' ? AppColors.permissionColor : AppColors.noPermissionColor,
+                ),
+                onPressed: () {
+                // addPermission('3r');
+              }, child: Text("R")
+              ),
+              SizedBox(width: buttonPadding,),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: widget.file.permissions[7] == 'w' ? AppColors.permissionColor : AppColors.noPermissionColor,
+                ),
+                onPressed: () {
+                // addPermission('3w');
+              }, child: Text("W")
+              ),
+              SizedBox(width: buttonPadding,),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: widget.file.permissions[8] == 'x' ? AppColors.permissionColor : AppColors.noPermissionColor,
+                ),
+                onPressed: () {
+                // addPermission('3x');
+              }, child: Text("X")
+              ),
+            ],
+            ),
+
+          
           ]
         ),
       ),
