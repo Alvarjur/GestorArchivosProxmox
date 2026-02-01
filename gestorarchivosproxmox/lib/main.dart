@@ -421,6 +421,46 @@ class SSHManager {
   }
 }
 
+Future<void> switchPermission(String filePath, String permission, bool add) async {
+    if (_client == null) return;
+
+    try {
+      // 1. Iniciar el cliente SFTP
+      _sftp ??= await _client!.sftp();
+      
+      // 2. Obtener atributos actuales
+      final attrs = await _sftp!.stat(filePath);
+      int mode = attrs.mode?.value ?? 0;
+
+      // 3. Modificar permisos
+      int permBit = 0;
+      switch (permission) {
+        case '1r': permBit = 0x100; break;
+        case '1w': permBit = 0x80; break;
+        case '1x': permBit = 0x40; break;
+        case '2r': permBit = 0x20; break;
+        case '2w': permBit = 0x10; break;
+        case '2x': permBit = 0x8; break;
+        case '3r': permBit = 0x4; break;
+        case '3w': permBit = 0x2; break;
+        case '3x': permBit = 0x1; break;
+      }
+
+      if (add) {
+        mode |= permBit; // Añadir permiso
+      } else {
+        mode &= ~permBit; // Quitar permiso
+      }
+
+      // 4. Aplicar nuevos permisos
+      await _sftp!.setStat(filePath, SftpFileAttrs(mode: SftpFileMode.value(mode)));
+      logger.i("Permisos actualizados para $filePath");
+    } catch (e) {
+      logger.e("Error cambiando permisos: $e");
+      _sftp = null; // Forzando reconexión si hay error
+    }
+  }
+
   Future<void> changeFileName(String oldPath, String newPath) async {
   if (_client == null) return;
 
@@ -435,6 +475,33 @@ class SSHManager {
     logger.e("Error renombrando archivo: $e");
     _sftp = null; // Forzando reconexión si hay error
   }
+  }
+
+  Future<void> deleteFile(String filePath) async {
+    if (_client == null) return;
+
+    try {
+      // 1. Iniciar el cliente SFTP
+      _sftp ??= await _client!.sftp();
+      
+      // 2. Eliminar el archivo
+      await _sftp!.remove(filePath);
+      logger.i("Archivo eliminado: $filePath");
+    } catch (e) {
+      logger.e("Error eliminando archivo: $e");
+      _sftp = null; // Forzando reconexión si hay error
+    }
+  }
+
+  Future<void> downloadFile(String filePath) async {
+    if (_client == null) return;
+
+    try {
+
+    } catch (e) {
+      logger.e("Error descargando archivo: $e");
+      _sftp = null; // Forzando reconexión si hay error
+    }
   }
 
   Future<void> listFiles(String path) async {
@@ -461,7 +528,11 @@ class SSHManager {
     logger.e("Error listando archivos: $e");
     _sftp = null; // Forzando reconexión si hay error
   }
+
+  
 }
+
+  
 
   Future<String> getPrivateKey(String file) async {
     String home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE']!;
@@ -530,12 +601,34 @@ class _FileDetailPageState extends State<FileDetailPage> {
             Icon(widget.file.isDirectory ? Icons.folder : Icons.insert_drive_file, size: 200),
 
             const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: () {
-               
-              }, 
-              child: const Text("Download")
-            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ElevatedButton(
+                onPressed: () {
+                  // widget.manager.downloadFile(p.join(currentPath, widget.file.name));
+                  
+                }, 
+                child: const Text("Download")
+                ),
+                SizedBox(width: 16,),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      widget.manager.deleteFile(p.join(currentPath, widget.file.name));
+                      widget.manager.listFiles(currentPath).then( (_) {
+                        Navigator.pop(context); // Esperando a que se liste después de borrar para volver
+                      });
+                      
+                    });
+                    
+                  },
+                  child: const Text("Delete")
+                ),
+              ],),
+            
+
+            ///////////////////////////////////////// PERMISOS
 
             const SizedBox(height: 24),
             Text("Permissions", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),),
@@ -548,7 +641,17 @@ class _FileDetailPageState extends State<FileDetailPage> {
                   backgroundColor: widget.file.permissions[0] == 'r' ? AppColors.permissionColor : AppColors.noPermissionColor,
                 ),
                 onPressed: () {
-                // addPermission('1r');
+                  setState(() {
+                    widget.manager.switchPermission(p.join(currentPath, widget.file.name), '1r', widget.file.permissions[0] != 'r');
+                    widget.file.permissions = widget.file.permissions[0] == 'r' 
+                      ? widget.file.permissions.replaceRange(0, 1, '-') 
+                      : widget.file.permissions.replaceRange(0, 1, 'r');
+
+                    widget.manager.listFiles(currentPath);
+                  });
+                  
+             
+             
               }, child: Text("R")
               ),
               SizedBox(width: buttonPadding,),
@@ -557,7 +660,14 @@ class _FileDetailPageState extends State<FileDetailPage> {
                   backgroundColor: widget.file.permissions[1] == 'w' ? AppColors.permissionColor : AppColors.noPermissionColor,
                 ),
                 onPressed: () {
-                // addPermission('1w');
+                  setState(() {
+                    widget.manager.switchPermission(p.join(currentPath, widget.file.name), '1w', widget.file.permissions[1] != 'w');
+                    widget.file.permissions = widget.file.permissions[1] == 'w' 
+                      ? widget.file.permissions.replaceRange(1, 2, '-') 
+                      : widget.file.permissions.replaceRange(1, 2, 'w');
+                    widget.manager.listFiles(currentPath);
+                  });
+                  
               }, child: Text("W")
               ),
               SizedBox(width: buttonPadding,),
@@ -566,7 +676,13 @@ class _FileDetailPageState extends State<FileDetailPage> {
                   backgroundColor: widget.file.permissions[2] == 'x' ? AppColors.permissionColor : AppColors.noPermissionColor,
                 ),
                 onPressed: () {
-                // addPermission('1x');
+                  setState(() {
+                    widget.manager.switchPermission(p.join(currentPath, widget.file.name), '1x', widget.file.permissions[2] != 'x');
+                    widget.file.permissions = widget.file.permissions[2] == 'x' 
+                      ? widget.file.permissions.replaceRange(2, 3, '-') 
+                      : widget.file.permissions.replaceRange(2, 3, 'x');
+                    widget.manager.listFiles(currentPath);
+                  });
               }, child: Text("X")
               ),
 
@@ -577,7 +693,13 @@ class _FileDetailPageState extends State<FileDetailPage> {
                   backgroundColor: widget.file.permissions[3] == 'r' ? AppColors.permissionColor : AppColors.noPermissionColor,
                 ),
                 onPressed: () {
-                // addPermission('2r');
+                  setState(() {
+                    widget.manager.switchPermission(p.join(currentPath, widget.file.name), '2r', widget.file.permissions[3] != 'r');
+                    widget.file.permissions = widget.file.permissions[3] == 'r' 
+                      ? widget.file.permissions.replaceRange(3, 4, '-') 
+                      : widget.file.permissions.replaceRange(3, 4, 'r');
+                    widget.manager.listFiles(currentPath);
+                  });
               }, child: Text("R")
               ),
               SizedBox(width: buttonPadding,),
@@ -586,7 +708,13 @@ class _FileDetailPageState extends State<FileDetailPage> {
                   backgroundColor: widget.file.permissions[4] == 'w' ? AppColors.permissionColor : AppColors.noPermissionColor,
                 ),
                 onPressed: () {
-                // addPermission('2w');
+                  setState(() {
+                    widget.manager.switchPermission(p.join(currentPath, widget.file.name), '2w', widget.file.permissions[4] != 'w');
+                    widget.file.permissions = widget.file.permissions[4] == 'w' 
+                      ? widget.file.permissions.replaceRange(4, 5, '-') 
+                      : widget.file.permissions.replaceRange(4, 5, 'w');
+                    widget.manager.listFiles(currentPath);
+                  });
               }, child: Text("W")
               ),
               SizedBox(width: buttonPadding,),
@@ -595,7 +723,13 @@ class _FileDetailPageState extends State<FileDetailPage> {
                   backgroundColor: widget.file.permissions[5] == 'x' ? AppColors.permissionColor : AppColors.noPermissionColor,
                 ),
                 onPressed: () {
-                // addPermission('2x');
+                  setState(() {
+                    widget.manager.switchPermission(p.join(currentPath, widget.file.name), '2x', widget.file.permissions[5] != 'x');
+                    widget.file.permissions = widget.file.permissions[5] == 'x' 
+                      ? widget.file.permissions.replaceRange(5, 6, '-') 
+                      : widget.file.permissions.replaceRange(5, 6, 'x');
+                    widget.manager.listFiles(currentPath);
+                  });
               }, child: Text("X")
               ),
 
@@ -606,7 +740,13 @@ class _FileDetailPageState extends State<FileDetailPage> {
                   backgroundColor: widget.file.permissions[6] == 'r' ? AppColors.permissionColor : AppColors.noPermissionColor,
                 ),
                 onPressed: () {
-                // addPermission('3r');
+                  setState(() {
+                    widget.manager.switchPermission(p.join(currentPath, widget.file.name), '3r', widget.file.permissions[6] != 'r');
+                    widget.file.permissions = widget.file.permissions[6] == 'r' 
+                      ? widget.file.permissions.replaceRange(6, 7, '-') 
+                      : widget.file.permissions.replaceRange(6, 7, 'r');
+                    widget.manager.listFiles(currentPath);
+                  });
               }, child: Text("R")
               ),
               SizedBox(width: buttonPadding,),
@@ -615,7 +755,13 @@ class _FileDetailPageState extends State<FileDetailPage> {
                   backgroundColor: widget.file.permissions[7] == 'w' ? AppColors.permissionColor : AppColors.noPermissionColor,
                 ),
                 onPressed: () {
-                // addPermission('3w');
+                  setState(() {
+                    widget.manager.switchPermission(p.join(currentPath, widget.file.name), '3w', widget.file.permissions[7] != 'w');
+                    widget.file.permissions = widget.file.permissions[7] == 'w' 
+                      ? widget.file.permissions.replaceRange(7, 8, '-') 
+                      : widget.file.permissions.replaceRange(7, 8, 'w');
+                    widget.manager.listFiles(currentPath);
+                  });
               }, child: Text("W")
               ),
               SizedBox(width: buttonPadding,),
@@ -624,9 +770,16 @@ class _FileDetailPageState extends State<FileDetailPage> {
                   backgroundColor: widget.file.permissions[8] == 'x' ? AppColors.permissionColor : AppColors.noPermissionColor,
                 ),
                 onPressed: () {
-                // addPermission('3x');
+                  setState(() {
+                    widget.manager.switchPermission(p.join(currentPath, widget.file.name), '3x', widget.file.permissions[8] != 'x');
+                    widget.file.permissions = widget.file.permissions[8] == 'x' 
+                      ? widget.file.permissions.replaceRange(8, 9, '-') 
+                      : widget.file.permissions.replaceRange(8, 9, 'x');
+                    widget.manager.listFiles(currentPath);
+                  });
               }, child: Text("X")
               ),
+              
             ],
             ),
 
