@@ -7,7 +7,11 @@ import 'package:flutter/widget_previews.dart';
 import 'dart:convert'; 
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:archive/archive_io.dart';
 
+// Error al descargar carpetas: Error en descarga: SftpStatusError: No such file(code 2)
+// TODO: Manejar servidores node, subir archivos/carpetas
+// Creo que el error de iniciar el servidor node es que se queda en el comando y no termina de ejecutarse, habría que ejecutarlo en segundo plano o algo así
 SSHManager sshManager = SSHManager();
 bool isConnected = false;
 List<ServerInfo> servers = [];
@@ -225,15 +229,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
               
               
-              Padding(
-                padding: EdgeInsets.all(16), 
-                child: ElevatedButton(
-                  onPressed: () {
-
-                  }, 
-                  child: Text("NEW")
-                  )
-              )
+            
               
             ],
           ),
@@ -477,6 +473,103 @@ Future<void> switchPermission(String filePath, String permission, bool add) asyn
   }
   }
 
+  // Importante: Asegúrate de usar p.posix para rutas remotas
+  final _remotePathContext = p.Context(style: p.Style.posix);
+
+  Future<void> downloadPath(String remotePath) async {
+    if (_client == null) return;
+
+    try {
+      _sftp ??= await _client!.sftp();
+      final stat = await _sftp!.stat(remotePath);
+      final downloadsDir = await getDownloadsDirectory();
+      
+      if (stat.isDirectory) {
+        await _downloadFolderAsZip(remotePath, downloadsDir!.path);
+      } else {
+        await _downloadSingleFile(remotePath, downloadsDir!.path);
+      }
+    } catch (e) {
+      logger.e("Error en descarga: $e");
+    }
+  }
+
+  Future<void> _downloadSingleFile(String remotePath, String localDir) async {
+    final fileName = _remotePathContext.basename(remotePath);
+    final localPath = p.join(localDir, fileName);
+    
+    logger.i("Descargando archivo individual: $fileName");
+    final remoteFile = await _sftp!.open(remotePath);
+    final localFile = File(localPath);
+    final ios = localFile.openWrite();
+    
+    await ios.addStream(remoteFile.read());
+    await ios.close();
+    logger.i("Archivo guardado en: $localPath");
+  }
+
+  Future<void> _downloadFolderAsZip(String remotePath, String localDir) async {
+  // Usamos p.posix para rutas remotas (siempre "/")
+  final folderName = p.posix.basename(remotePath);
+  final zipName = "${folderName}_${DateTime.now().millisecondsSinceEpoch}.zip";
+  
+  // Usamos el HOME del servidor (~) para asegurar permisos de escritura
+  final remoteZipPath = "~/$zipName"; 
+  final localZipPath = p.join(localDir, zipName);
+
+  try {
+    logger.i('Comprimiendo carpeta en el servidor...');
+    final parentDir = p.posix.dirname(remotePath);
+
+    // Comando: entrar al padre, comprimir y guardar en el HOME
+    await _client!.execute('cd "$parentDir" && zip -r "$remoteZipPath" "$folderName"');
+
+    _sftp ??= await _client!.sftp();
+    
+    logger.i('Descargando ZIP...');
+    // Abrimos el archivo por su nombre (relativo al home del usuario SFTP)
+    final remoteFile = await _sftp!.open(zipName); 
+    final localFile = File(localZipPath);
+    
+    final ios = localFile.openWrite();
+    await ios.addStream(remoteFile.read());
+    await ios.close();
+
+    logger.i('Descomprimiendo localmente...');
+    
+    // SOLUCIÓN AL ERROR decodeBuffer:
+    // Usamos decodeBytes cargando el archivo en un buffer de memoria
+    final bytes = File(localZipPath).readAsBytesSync();
+    final archive = ZipDecoder().decodeBytes(bytes);
+
+    for (final file in archive) {
+      final String filename = file.name;
+      final String destPath = p.join(localDir, filename);
+      
+      if (file.isFile) {
+        final data = file.content as List<int>;
+        File(destPath)
+          ..createSync(recursive: true)
+          ..writeAsBytesSync(data);
+      } else {
+        Directory(destPath).createSync(recursive: true);
+      }
+    }
+
+    // Limpieza
+    logger.i('Limpiando archivos temporales...');
+    await _client!.execute('rm "$remoteZipPath"');
+    if (await File(localZipPath).exists()) {
+      await File(localZipPath).delete();
+    }
+    
+    logger.i('¡Carpeta descargada y descomprimida con éxito!');
+  } catch (e) {
+    logger.e('Fallo en proceso ZIP: $e');
+    rethrow;
+  }
+}
+
   Future<void> deleteFile(String filePath) async {
     if (_client == null) return;
 
@@ -493,14 +586,79 @@ Future<void> switchPermission(String filePath, String permission, bool add) asyn
     }
   }
 
-  Future<void> downloadFile(String filePath) async {
+  Future<void> downloadAsZip(String remotePath) async {
     if (_client == null) return;
 
-    try {
+    // nombre base y timestamp para el ZIP
+    final String baseName = p.basename(remotePath);
+    final String timeStamp = DateTime.now().millisecondsSinceEpoch.toString();
+    final String zipName = "${baseName}_$timeStamp.zip";
 
+    // aseguramos cliente SFTP activo
+    _sftp ??= await _client!.sftp();
+
+    final downloadsDir = await getDownloadsDirectory();
+    final localZipPath = p.join(downloadsDir!.path, zipName);
+
+    try {
+      logger.i('Comprimiendo en el servidor...');
+
+      final parentDir = p.dirname(remotePath);
+      final folderName = p.basename(remotePath);
+
+      // crear zip con ruta relativa al directorio padre
+      // escapar comillas en rutas para el shell
+      final safeParent = parentDir.replaceAll('"', '\\"');
+      final safeFolder = folderName.replaceAll('"', '\\"');
+      final safeZipName = zipName.replaceAll('"', '\\"');
+
+      // crear el zip en el mismo directorio padre donde está el archivo/carpeta
+      final zipCommand =
+          'cd "$safeParent" && zip -r "$safeZipName" "$safeFolder" && pwd';
+      logger.i('Ejecutando comando: $zipCommand');
+      final result = await _client!.execute(zipCommand);
+      logger.i('Resultado del comando: $result');
+
+      // la ruta remota es relativa a parentDir
+      final remoteZipPath = p.join(parentDir, zipName);
+      logger.i('Intentando abrir ZIP desde: $remoteZipPath');
+
+      logger.i('Descargando ZIP desde el servidor...');
+      final remoteFile = await _sftp!.open(remoteZipPath);
+      final localFile = File(localZipPath);
+      final ios = localFile.openWrite();
+      await ios.addStream(remoteFile.read());
+      await ios.close();
+
+      // descomprimir en carpeta con el nombre original
+      final extractDir = Directory(p.join(downloadsDir.path, baseName));
+      if (!extractDir.existsSync()) extractDir.createSync(recursive: true);
+      logger.i('Descomprimiendo localmente en ${extractDir.path}...');
+
+      final bytes = File(localZipPath).readAsBytesSync();
+      final archive = ZipDecoder().decodeBytes(bytes);
+      for (final file in archive) {
+        final filename = file.name;
+        final destPath = p.join(extractDir.path, filename);
+        if (file.isFile) {
+          File(destPath)
+            ..createSync(recursive: true)
+            ..writeAsBytesSync(file.content as List<int>);
+        } else {
+          Directory(destPath).createSync(recursive: true);
+        }
+      }
+
+      // limpiar archivos
+      await _client!.execute('rm "${remoteZipPath}"').catchError((_) => {});
+      if (await File(localZipPath).exists()) await File(localZipPath).delete();
+
+      logger.i('¡Éxito! Archivos guardados en ${extractDir.path}');
     } catch (e) {
-      logger.e("Error descargando archivo: $e");
-      _sftp = null; // Forzando reconexión si hay error
+      logger.e('Error descargando/comprimiendo: $e');
+      // intentar limpiar
+      final zipPath = p.join(p.dirname(remotePath), "${baseName}_*.zip");
+      await _client!.execute('rm $zipPath').catchError((_) => {});
     }
   }
 
@@ -547,6 +705,64 @@ Future<void> switchPermission(String filePath, String permission, bool add) asyn
       throw Exception("Private key file not found: $keyPath");
     }
   }
+
+  Future<String?> checkServerType(String path) async {
+    if (_client == null) return null;
+
+    try {
+      _sftp ??= await _client!.sftp();
+      final items = await _sftp!.listdir(path);
+      for (final item in items) {
+        if (item.filename == 'package.json') return 'node';
+        if (item.filename == 'pom.xml' || item.filename == 'build.gradle' || item.filename == 'build.gradle.kts') return 'java';
+      }
+      return null;
+    } catch (e) {
+      logger.e("Error checking server type: $e");
+      return null;
+    }
+  }
+
+  Future<void> executeCommand(String command) async {
+    if (_client == null) return;
+
+    try {
+      final session = await _client!.execute(command);
+      if (!command.trim().endsWith('&')) {
+        // Only wait for output if it's not a background command
+        final output = utf8.decode(await session.stdout.fold(<int>[], (previous, element) => previous..addAll(element)));
+        logger.i("Command executed: $command, output: $output");
+      } else {
+        // Background command, just log and don't wait
+        logger.i("Background command executed: $command");
+      }
+    } catch (e) {
+      logger.e("Error executing command: $e");
+    }
+  }
+
+  Future<bool> isServerRunning(String type, String path) async {
+    if (_client == null) return false;
+
+    try {
+      String port;
+      if (type == 'node') {
+        port = '3000'; // Default Node dev port
+      } else if (type == 'java') {
+        port = '8080'; // Default Spring Boot port
+      } else {
+        return false;
+      }
+
+      final command = 'ss -tln | grep :$port || netstat -tln | grep :$port';
+      final session = await _client!.execute(command);
+      final output = utf8.decode(await session.stdout.fold(<int>[], (previous, element) => previous..addAll(element)));
+      return output.trim().isNotEmpty;
+    } catch (e) {
+      logger.e("Error checking server status: $e");
+      return false;
+    }
+  }
 }
 
 class FileDetailPage extends StatefulWidget {
@@ -563,9 +779,59 @@ class FileDetailPage extends StatefulWidget {
 
 class _FileDetailPageState extends State<FileDetailPage> {
   double buttonPadding = 4;
-  @override
-  
+  String? serverType;
+  bool isRunning = false;
 
+  @override
+  void initState() {
+    super.initState();
+    if (widget.file.isDirectory) {
+      _checkServerType();
+    }
+  }
+
+  Future<void> _checkServerType() async {
+    serverType = await widget.manager.checkServerType(p.posix.join(currentPath, widget.file.name));
+    if (serverType != null) {
+      await _checkServerStatus();
+    }
+    setState(() {});
+  }
+
+  Future<void> _checkServerStatus() async {
+    isRunning = await widget.manager.isServerRunning(serverType!, p.posix.join(currentPath, widget.file.name));
+    setState(() {});
+  }
+
+  Future<void> startServer() async {
+    String path = p.posix.join(currentPath, widget.file.name);
+    String command;
+    if (serverType == 'node') {
+      command = 'cd "$path" && nohup npm run dev > /dev/null 2>&1 &';
+    } else if (serverType == 'java') {
+      command = 'cd "$path" && nohup mvn spring-boot:run > /dev/null 2>&1 &';
+    } else {
+      return;
+    }
+    await widget.manager.executeCommand(command);
+    // Wait for the server to start up
+    await Future.delayed(const Duration(seconds: 3));
+    await _checkServerStatus();
+  }
+
+  Future<void> stopServer() async {
+    String process = serverType == 'node' ? 'node' : 'java';
+    await widget.manager.executeCommand('pkill -f $process');
+    await _checkServerStatus();
+  }
+
+  Future<void> restartServer() async {
+    await stopServer();
+    await Future.delayed(const Duration(seconds: 2));
+    await startServer();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -605,13 +871,28 @@ class _FileDetailPageState extends State<FileDetailPage> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 ElevatedButton(
-                onPressed: () {
-                  // widget.manager.downloadFile(p.join(currentPath, widget.file.name));
-                  
-                }, 
-                child: const Text("Download")
+                  onPressed: () async {
+                    // Mostramos un snackbar o indicador de carga
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("Iniciando descarga...")),
+                    );
+                    
+                    // Construimos la ruta usando p.posix para asegurar '/'
+                    String fullRemotePath = p.posix.join(currentPath, widget.file.name);
+                    
+                    await widget.manager.downloadPath(fullRemotePath);
+                    
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("Descarga completada")),
+                      );
+                    }
+                  }, 
+                  child: const Text("Download")
                 ),
                 SizedBox(width: 16,),
+
+
                 ElevatedButton(
                   onPressed: () {
                     setState(() {
@@ -782,6 +1063,45 @@ class _FileDetailPageState extends State<FileDetailPage> {
               
             ],
             ),
+
+            const SizedBox(height: 24),
+            if (serverType != null) ...[
+              Text("Server Controls", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),),
+              const SizedBox(height: 8),
+              Text(
+                "Status: ${isRunning ? 'Running' : 'Stopped'}",
+                style: TextStyle(
+                  fontSize: 16,
+                  color: isRunning ? Colors.green : Colors.red,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ElevatedButton(
+                    onPressed: startServer,
+                    child: const Text("Start")
+                  ),
+                  const SizedBox(width: 16),
+                  ElevatedButton(
+                    onPressed: stopServer,
+                    child: const Text("Stop")
+                  ),
+                  const SizedBox(width: 16),
+                  ElevatedButton(
+                    onPressed: restartServer,
+                    child: const Text("Restart")
+                  ),
+                ],
+              ),
+            ],
+
+            ////////////////////// Comprobación de si la carpeta contiene un servidor node o java
+            /// En caso de que sí, se puede encender/apagar/reiniciar
+            
+
 
           
           ]
