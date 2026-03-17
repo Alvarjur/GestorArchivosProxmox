@@ -8,10 +8,10 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive_io.dart';
+import 'package:file_picker/file_picker.dart';
+import 'dart:typed_data';
 
-// Error al descargar carpetas: Error en descarga: SftpStatusError: No such file(code 2)
-// TODO: Manejar servidores node, subir archivos/carpetas
-// Creo que el error de iniciar el servidor node es que se queda en el comando y no termina de ejecutarse, habría que ejecutarlo en segundo plano o algo así
+
 SSHManager sshManager = SSHManager();
 bool isConnected = false;
 List<ServerInfo> servers = [];
@@ -491,6 +491,26 @@ Future<void> switchPermission(String filePath, String permission, bool add) asyn
       }
     } catch (e) {
       logger.e("Error en descarga: $e");
+    }
+  }
+
+  Future<void> uploadFile(String localPath, String remotePath) async {
+    if (_client == null) return;
+
+    try {
+      _sftp ??= await _client!.sftp();
+      final localFile = File(localPath);
+      final fileName = p.basename(localPath);
+      final remoteFilePath = p.posix.join(remotePath, fileName);
+
+      logger.i("Subiendo archivo: $fileName a $remoteFilePath");
+      final remoteFile = await _sftp!.open(remoteFilePath, mode: SftpFileOpenMode.create | SftpFileOpenMode.write);
+      final stream = localFile.openRead().map((list) => Uint8List.fromList(list));
+      await remoteFile.write(stream);
+      logger.i("Archivo subido exitosamente: $remoteFilePath");
+    } catch (e) {
+      logger.e("Error subiendo archivo: $e");
+      _sftp = null; // Forzando reconexión si hay error
     }
   }
 
@@ -1186,7 +1206,24 @@ class _FileExplorerPageState extends State<FileExplorerPage> {
         },
       ),)
         
-      ],) 
+      ],),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () async {
+          FilePickerResult? result = await FilePicker.platform.pickFiles();
+          if (result != null) {
+            String? filePath = result.files.single.path;
+            if (filePath != null) {
+              await widget.manager.uploadFile(filePath, currentPath);
+              await widget.manager.listFiles(currentPath);
+              setState(() {});
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("File uploaded successfully")),
+              );
+            }
+          }
+        },
+        child: const Icon(Icons.upload),
+      ),
     );
   }
 }
