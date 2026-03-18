@@ -473,7 +473,6 @@ Future<void> switchPermission(String filePath, String permission, bool add) asyn
   }
   }
 
-  // Importante: Asegúrate de usar p.posix para rutas remotas
   final _remotePathContext = p.Context(style: p.Style.posix);
 
   Future<void> downloadPath(String remotePath) async {
@@ -785,6 +784,7 @@ Future<void> switchPermission(String filePath, String permission, bool add) asyn
   }
 }
 
+// Clase para la página de detalles del archivo
 class FileDetailPage extends StatefulWidget {
   final SSHManager manager;
   final FileItem file;
@@ -1118,10 +1118,6 @@ class _FileDetailPageState extends State<FileDetailPage> {
               ),
             ],
 
-            ////////////////////// Comprobación de si la carpeta contiene un servidor node o java
-            /// En caso de que sí, se puede encender/apagar/reiniciar
-            
-
 
           
           ]
@@ -1131,7 +1127,7 @@ class _FileDetailPageState extends State<FileDetailPage> {
   }
 }
 
-
+// Clase para la página del explorador de archivos
 class FileExplorerPage extends StatefulWidget {
   final SSHManager manager;
   
